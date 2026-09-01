@@ -3,7 +3,7 @@ name = "deepmd-torchsim"
 version = "0.1.0"
 description = "DeePMD-kit (PyTorch backend) ModelInterface implementation for torch-sim"
 readme = "README.md"
-authors = [{ email = "umraorahul07@gmail.com" }]
+authors = [{ email = "rverma7@ncsu.edu" }]
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,7 +20,7 @@ test = ["pytest>=8"]
 [tool.pytest.ini_options]
 filterwarnings = [
     # deepmd-kit loads its frozen model via torch.jit.load internally; these
-    # deprecation warnings are from deepmd-kit's own code, not ours.
+    # deprecation warnings are from deepmd-kit's own code.
     "ignore:`torch.jit.script` is deprecated.*:DeprecationWarning",
     "ignore:`torch.jit.script_method` is deprecated.*:DeprecationWarning",
     "ignore:`torch.jit.load` is deprecated.*:DeprecationWarning",
@@ -34,8 +34,6 @@ build-backend = "setuptools.build_meta"
 include = ["deepmd_torchsim*"]
 
 [tool.setuptools.package-data]
-# Small (~10 MB) example CH4 model, shipped so tutorials/examples can run
-# end-to-end without requiring a user-provided trained model.
 deepmd_torchsim = ["data/*.pth"]
 
 [tool.ruff]
@@ -63,8 +61,6 @@ ignore = [
 pydocstyle.convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# PTH1xx (prefer pathlib.Path) is intentionally ignored here: tests use os.path
-# on purpose.
 "**/tests/*" = [
     "ANN001",
     "ANN201",
