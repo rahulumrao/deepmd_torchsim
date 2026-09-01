@@ -87,7 +87,7 @@ class DeepmdModel(ModelInterface):
             model_path="frozen_model.pth",
             device=torch.device("cuda"),
             compute_forces=True,
-            compute_stress=True,
+            compute_stress=False,
         )
         results = model(sim_state)
         ```
@@ -100,7 +100,7 @@ class DeepmdModel(ModelInterface):
         dtype: torch.dtype = torch.float64,
         *,
         compute_forces: bool = True,
-        compute_stress: bool = True,
+        compute_stress: bool = False,
         head: str | None = None,
     ) -> None:
         """Initialize the DeePMD-kit model wrapper.
@@ -119,7 +119,7 @@ class DeepmdModel(ModelInterface):
             compute_forces: Whether to compute and return atomic forces.
                 Defaults to True.
             compute_stress: Whether to compute and return the stress tensor.
-                Defaults to True.
+                Defaults to False.
             head: Task/domain head to select, for multitask models such as
                 DPA-3 foundation checkpoints (e.g. ``"Omat24"``). Ignored by
                 single-task models. Defaults to None, which lets ``DeepPot``
@@ -182,6 +182,8 @@ class DeepmdModel(ModelInterface):
         positions_list: list[np.ndarray],
         cell_list: list[np.ndarray],
         atom_types: np.ndarray,
+        *,
+        periodic: bool,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Evaluate a group of same-shape, same-species-order systems in one call.
 
@@ -196,22 +198,33 @@ class DeepmdModel(ModelInterface):
                 column-vector convention (see :class:`~torch_sim.state.SimState`).
             atom_types: DeePMD type indices shared by every system in the
                 group, shape ``[n_atoms]``.
+            periodic: Whether ``state.pbc`` is set for this state. When False,
+                ``cells=None`` is passed to ``DeepPot.eval`` instead of the
+                (possibly zero/degenerate) cell array -- per DeepPot.eval's
+                own docstring: "If the system is not periodic, set it to
+                None."
 
         Returns:
             tuple[np.ndarray, np.ndarray, np.ndarray]: ``(energy, forces,
             virial)`` where ``energy`` has shape ``[n_frames]``, ``forces`` has
             shape ``[n_frames, n_atoms, 3]`` (eV/Angstrom), and ``virial`` has
-            shape ``[n_frames, 3, 3]`` (eV).
+            shape ``[n_frames, 3, 3]`` (eV; all-zero when ``periodic=False``,
+            since DeepPot.eval doesn't compute a virial without a cell).
         """
         n_frames = len(positions_list)
         coords = np.stack(
             [p.astype(np.float64).reshape(-1) for p in positions_list], axis=0
         )
 
-        # torch-sim stores cell column-vector-wise: [[a1,b1,c1],[a2,b2,c2],[a3,b3,c3]].
-        # DeepPot / ASE expect the row-vector convention
-        # [[a1,a2,a3],[b1,b2,b3],[c1,c2,c3]], i.e. the transpose.
-        cells = np.stack([c.astype(np.float64).T.reshape(-1) for c in cell_list], axis=0)
+        if periodic:
+            # torch-sim stores cell column-vector-wise: [[a1,b1,c1],[a2,b2,c2],[a3,b3,c3]].
+            # DeepPot / ASE expect the row-vector convention
+            # [[a1,a2,a3],[b1,b2,b3],[c1,c2,c3]], i.e. the transpose.
+            cells = np.stack(
+                [c.astype(np.float64).T.reshape(-1) for c in cell_list], axis=0
+            )
+        else:
+            cells = None
 
         # atomic/fparam/aparam/mixed_type are passed explicitly to match one of
         # DeepPot.eval's typed @overload stubs, which don't default them.
@@ -224,6 +237,8 @@ class DeepmdModel(ModelInterface):
             aparam=None,
             mixed_type=False,
         )[:3]
+        if virial is None:
+            virial = np.zeros((n_frames, 3, 3))
         return energy[:, 0], force, virial.reshape(n_frames, 3, 3)
 
     def forward(self, state: SimState, **_kwargs) -> dict[str, torch.Tensor]:
@@ -251,6 +266,11 @@ class DeepmdModel(ModelInterface):
         """
         n_systems = int(state.system_idx.max().item()) + 1
         n_atoms = state.positions.shape[0]
+
+        # state.pbc is a global (whole-batch) attribute, not per-system -- see
+        # torch_sim.state.SimState's `_global_attributes`. `.any()` mirrors
+        # SimState.wrapped_positions' own periodicity check.
+        periodic = bool(state.pbc.any())
 
         energies = torch.zeros(n_systems, dtype=self._dtype, device=self._device)
         forces_out = (
@@ -285,7 +305,7 @@ class DeepmdModel(ModelInterface):
             cell_list = [state.cell[i].detach().cpu().numpy() for i in sys_indices]
 
             energy, force, virial = self._eval_group(
-                positions_list, cell_list, shared_atom_types
+                positions_list, cell_list, shared_atom_types, periodic=periodic
             )
 
             for local_i, sys_idx in enumerate(sys_indices):
@@ -297,7 +317,10 @@ class DeepmdModel(ModelInterface):
                         force[local_i], dtype=self._dtype, device=self._device
                     )
 
-                if stress_out is not None:
+                # No physically meaningful stress/volume for a non-periodic
+                # system -- left as zero (stress_out's init value) rather than
+                # dividing by a degenerate cell's volume.
+                if stress_out is not None and periodic:
                     # cell is stored column-vector-wise; volume is basis-independent.
                     volume = torch.abs(torch.det(state.cell[sys_idx])).item()
                     stress = -0.5 * (virial[local_i] + virial[local_i].T) / volume

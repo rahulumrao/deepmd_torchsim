@@ -63,7 +63,7 @@ pytest tests/
 
 ## License
 
-This project is licensed under the [MIT License](./LICENSE).
+This project is licensed under the [MIT License](https://github.com/rahulumrao/deepmd_torchsim/blob/main/LICENSE).
 
 ## Author
 Rahul Verma \
