@@ -13,7 +13,7 @@ pip install deepmd-torchsim
 uv pip install deepmd-torchsim
 uv add deepmd-torchsim
 
-# editable, from a local checkout (what this repo uses during development)
+# editable, from a local checkout 
 pip install -e .
 uv pip install -e .
 ```
